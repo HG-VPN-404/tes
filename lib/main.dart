@@ -4,14 +4,15 @@ import 'dart:isolate';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // PENTING: Buat fitur Paste
 import 'package:http/http.dart' as http;
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
-// --- URL DIPERBAIKI (HAPUS /?url= di belakangnya) ---
 const String WORKER_URL = "https://sky.publicxx.workers.dev";
 
 void main() async {
@@ -105,7 +106,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     FocusScope.of(context).unfocus();
     _urlHistory.clear();
-    // URL sudah aman sekarang
     final apiUrl = "$WORKER_URL/?url=$targetUrl";
     await _fetchData(apiUrl);
   }
@@ -143,49 +143,43 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // --- LOGIKA DOWNLOAD FIX (ANDROID 13+) ---
+  // --- LOGIKA DOWNLOAD FIX (MASUK GALERI / DOWNLOAD FOLDER) ---
   Future<void> _downloadFile(String url, String filename) async {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("Menyiapkan download..."), duration: Duration(milliseconds: 500)),
     );
 
-    // 1. Cek Izin (Video -> Storage -> Manage)
+    bool hasPermission = false;
+
     if (Platform.isAndroid) {
-      var videoStatus = await Permission.videos.status;
-      if (!videoStatus.isGranted) {
-        videoStatus = await Permission.videos.request();
-      }
-
-      if (!videoStatus.isGranted) {
-        var storageStatus = await Permission.storage.status;
-        if (!storageStatus.isGranted) {
-          storageStatus = await Permission.storage.request();
+      final deviceInfo = await DeviceInfoPlugin().androidInfo;
+      
+      // Android 10 (SDK 29) ke atas TIDAK PERLU izin storage untuk download ke public folder
+      if (deviceInfo.version.sdkInt > 29) {
+        hasPermission = true;
+      } else {
+        // Android 9 ke bawah masih butuh izin
+        var status = await Permission.storage.status;
+        if (!status.isGranted) {
+          status = await Permission.storage.request();
         }
-        
-        if (!storageStatus.isGranted) {
-           var manageStatus = await Permission.manageExternalStorage.status;
-           if (!manageStatus.isGranted) {
-              manageStatus = await Permission.manageExternalStorage.request();
-           }
-
-           if (!manageStatus.isGranted) {
-             _showPermissionDialog();
-             return;
-           }
-        }
+        hasPermission = status.isGranted;
       }
+    } else {
+      hasPermission = true;
     }
 
-    // 2. Path
-    final directory = await getExternalStorageDirectory();
-    final savedDir = directory?.path;
-
-    if (savedDir == null) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gagal storage path.")));
+    if (!hasPermission) {
+      _showPermissionDialog();
       return;
     }
 
-    // 3. Eksekusi
+    // Path (wajib ada meski diabaikan Android 10+)
+    final directory = await getExternalStorageDirectory();
+    final savedDir = directory?.path;
+
+    if (savedDir == null) return;
+
     try {
       await FlutterDownloader.enqueue(
         url: url,
@@ -193,11 +187,11 @@ class _HomeScreenState extends State<HomeScreen> {
         fileName: filename,
         showNotification: true,
         openFileFromNotification: true,
-        saveInPublicStorage: false, 
+        saveInPublicStorage: true, // TRUE = Masuk Folder Download/Galeri
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Sedang mengunduh: $filename"), backgroundColor: Colors.green),
+          SnackBar(content: Text("Download dimulai! Cek notifikasi bar."), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
@@ -213,15 +207,15 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("Butuh Izin"),
-        content: const Text("Android memblokir akses penyimpanan. Harap berikan izin 'Foto dan Video' atau 'Kelola File' di pengaturan."),
+        content: const Text("Mohon izinkan akses penyimpanan untuk mengunduh file."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Batal")),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Tutup")),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
               openAppSettings();
             },
-            child: const Text("Buka Pengaturan"),
+            child: const Text("Pengaturan"),
           ),
         ],
       )
@@ -270,7 +264,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         TextField(
                           controller: _urlController,
                           decoration: InputDecoration(
-                            labelText: "Tempel Link Terabox di sini",
+                            labelText: "Paste link disini",
                             hintText: "https://terabox.com/s/...",
                             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             filled: true,
@@ -278,7 +272,15 @@ class _HomeScreenState extends State<HomeScreen> {
                             prefixIcon: const Icon(Icons.link),
                             suffixIcon: IconButton(
                               icon: const Icon(Icons.paste),
-                              onPressed: () async {},
+                              // --- FITUR PASTE YANG SUDAH DIPERBAIKI ---
+                              onPressed: () async {
+                                final data = await Clipboard.getData(Clipboard.kTextPlain);
+                                if (data?.text != null) {
+                                  setState(() {
+                                    _urlController.text = data!.text!;
+                                  });
+                                }
+                              },
                             ),
                           ),
                         ),
