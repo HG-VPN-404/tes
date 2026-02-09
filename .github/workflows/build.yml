@@ -1,0 +1,41 @@
+name: Build APK Terabox
+
+on:
+  push:
+    branches: [ main, master ] # Jalankan saat ada push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # 1. Setup Java 17 (Standar baru Gradle)
+    - name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+
+    # 2. Setup Flutter (Versi Stable)
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.19.0'
+        channel: 'stable'
+
+    # 3. Install Library
+    - name: Install Dependencies
+      run: flutter pub get
+
+    # 4. Build APK (Release)
+    - name: Build APK
+      run: flutter build apk --release --no-shrink
+
+    # 5. Upload Hasil APK ke GitHub
+    - name: Upload APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: terabox-player-apk
+        path: build/app/outputs/flutter-apk/app-release.apk
