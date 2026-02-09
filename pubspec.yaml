@@ -13,9 +13,9 @@ dependencies:
   # Network
   http: ^1.1.0
   
-  # Video Player & UI Controls
-  video_player: ^2.8.1
-  chewie: ^1.7.1
+  # Video Player (KITA KUNCI VERSI AMAN)
+  video_player: 2.8.1
+  chewie: 1.7.1
   
   # Downloading
   flutter_downloader: ^1.11.0
