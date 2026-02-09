@@ -11,8 +11,8 @@ import 'package:flutter_downloader/flutter_downloader.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-// --- GANTI URL INI DENGAN URL WORKER KAMU ---
-const String WORKER_URL = "https://sky.publicxx.workers.dev/?url=";
+// --- URL DIPERBAIKI (HAPUS /?url= di belakangnya) ---
+const String WORKER_URL = "https://sky.publicxx.workers.dev";
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,12 +20,11 @@ void main() async {
 
   runApp(MaterialApp(
     debugShowCheckedModeBanner: false,
-    // Ganti tema dasar biar gak terlalu kaku
     theme: ThemeData(
       useMaterial3: true,
       colorScheme: ColorScheme.fromSeed(
         seedColor: Colors.deepPurple,
-        background: Colors.grey[100], // Background agak abu terang
+        background: Colors.grey[100],
       ),
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.white,
@@ -51,7 +50,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = false;
   String _statusMessage = "";
   List<dynamic> _fileList = [];
-  // Stack history URL untuk navigasi folder
   List<String> _urlHistory = [];
 
   final ReceivePort _port = ReceivePort();
@@ -62,7 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
     IsolateNameServer.registerPortWithName(
         _port.sendPort, 'downloader_send_port');
     _port.listen((dynamic data) {
-      // Handle progress update if needed
+      // Handle progress update
     });
     FlutterDownloader.registerCallback(downloadCallback);
   }
@@ -81,26 +79,21 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  // --- LOGIKA NAVIGASI BACK ---
-  // Fungsi ini menangani tombol Back fisik di HP dan tombol Back di AppBar
   Future<void> _handleBackButton() async {
     if (_urlHistory.length > 1) {
-      // Kasus 1: Sedang di dalam sub-folder -> Mundur satu level
       setState(() {
-        _urlHistory.removeLast(); // Hapus URL folder sekarang
-        String previousUrl = _urlHistory.last; // Ambil URL sebelumnya
-        _urlHistory.removeLast(); // Hapus lagi biar gak dobel saat fetch
-        _fetchData(previousUrl); // Load folder sebelumnya
+        _urlHistory.removeLast();
+        String previousUrl = _urlHistory.last;
+        _urlHistory.removeLast();
+        _fetchData(previousUrl);
       });
     } else if (_fileList.isNotEmpty) {
-      // Kasus 2: Di root hasil pencarian -> Kembali ke layar input kosong
       setState(() {
         _fileList = [];
         _urlHistory.clear();
         _statusMessage = "";
       });
     }
-    // Kasus 3: Layar sudah kosong -> Biarkan sistem menutup aplikasi (default)
   }
 
   Future<void> _processInitialLink() async {
@@ -110,8 +103,9 @@ class _HomeScreenState extends State<HomeScreen> {
           const SnackBar(content: Text("Link tidak boleh kosong")));
       return;
     }
-    FocusScope.of(context).unfocus(); // Tutup keyboard
+    FocusScope.of(context).unfocus();
     _urlHistory.clear();
+    // URL sudah aman sekarang
     final apiUrl = "$WORKER_URL/?url=$targetUrl";
     await _fetchData(apiUrl);
   }
@@ -149,95 +143,99 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // --- LOGIKA DOWNLOAD DENGAN DIAGNOSTIK ---
+  // --- LOGIKA DOWNLOAD FIX (ANDROID 13+) ---
   Future<void> _downloadFile(String url, String filename) async {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Menyiapkan download..."), duration: Duration(seconds: 1)),
+      const SnackBar(content: Text("Menyiapkan download..."), duration: Duration(milliseconds: 500)),
     );
 
-    // 1. Cek Permission (Lebih detail untuk Android baru)
-    PermissionStatus status;
+    // 1. Cek Izin (Video -> Storage -> Manage)
     if (Platform.isAndroid) {
-       // Coba request storage dulu.
-       // Di Android 13+, ini mungkin selalu denied, tapi kita butuh untuk path.
-       status = await Permission.storage.request();
+      var videoStatus = await Permission.videos.status;
+      if (!videoStatus.isGranted) {
+        videoStatus = await Permission.videos.request();
+      }
 
-       if (status.isDenied || status.isPermanentlyDenied) {
-         // Jika ditolak (umum di Android 13+), coba manage external storage
-         // Ini izin yang lebih kuat tapi kadang dibutuhkan.
-         status = await Permission.manageExternalStorage.request();
-       }
-    } else {
-       status = await Permission.storage.request();
+      if (!videoStatus.isGranted) {
+        var storageStatus = await Permission.storage.status;
+        if (!storageStatus.isGranted) {
+          storageStatus = await Permission.storage.request();
+        }
+        
+        if (!storageStatus.isGranted) {
+           var manageStatus = await Permission.manageExternalStorage.status;
+           if (!manageStatus.isGranted) {
+              manageStatus = await Permission.manageExternalStorage.request();
+           }
+
+           if (!manageStatus.isGranted) {
+             _showPermissionDialog();
+             return;
+           }
+        }
+      }
     }
 
-
-    if (!status.isGranted && !status.isLimited) {
-       if (mounted) {
-        showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text("Izin Ditolak"),
-            content: const Text("Aplikasi membutuhkan izin penyimpanan untuk mengunduh file. Harap aktifkan di pengaturan."),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Tutup")),
-              TextButton(onPressed: () => openAppSettings(), child: const Text("Buka Pengaturan")),
-            ],
-          )
-        );
-       }
-       return;
-    }
-
-    // 2. Tentukan path penyimpanan
-    // Kita gunakan getExternalStorageDirectory (biasanya di Android/data/com.package/files/)
-    // Ini paling aman di Android modern karena tidak butuh izin broad storage.
+    // 2. Path
     final directory = await getExternalStorageDirectory();
     final savedDir = directory?.path;
 
     if (savedDir == null) {
-      if (mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gagal menemukan folder penyimpanan.")));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gagal storage path.")));
       return;
     }
 
+    // 3. Eksekusi
     try {
-      // 3. Eksekusi Download
       await FlutterDownloader.enqueue(
         url: url,
         savedDir: savedDir,
         fileName: filename,
         showNotification: true,
         openFileFromNotification: true,
-        saveInPublicStorage: false, // Set false biar aman di scoped storage
+        saveInPublicStorage: false, 
       );
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Download dimulai: $filename\nCek notifikasi bar.")),
+          SnackBar(content: Text("Sedang mengunduh: $filename"), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error saat memulai download: $e")),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Err: $e")));
       }
     }
   }
 
+  void _showPermissionDialog() {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Butuh Izin"),
+        content: const Text("Android memblokir akses penyimpanan. Harap berikan izin 'Foto dan Video' atau 'Kelola File' di pengaturan."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Batal")),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              openAppSettings();
+            },
+            child: const Text("Buka Pengaturan"),
+          ),
+        ],
+      )
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Cek apakah kita sedang tidak di halaman awal kosong
     bool canGoBack = _urlHistory.isNotEmpty;
 
-    // PopScope menangani tombol Back fisik di HP
     return PopScope(
-      canPop: !canGoBack, // Kalau bisa go back, jangan biarkan sistem pop (exit)
+      canPop: !canGoBack,
       onPopInvoked: (didPop) async {
         if (didPop) return;
-        // Kalau sistem gak handle, kita handle sendiri logic back-nya
         await _handleBackButton();
       },
       child: Scaffold(
@@ -247,7 +245,6 @@ class _HomeScreenState extends State<HomeScreen> {
             style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple),
           ),
           centerTitle: true,
-          // Tombol Back di AppBar manual
           leading: canGoBack
               ? IconButton(
                   icon: const Icon(Icons.arrow_back_ios_new, color: Colors.deepPurple),
@@ -259,7 +256,6 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: const EdgeInsets.all(16.0),
           child: Column(
             children: [
-              // Input Section (Hanya muncul kalau list kosong dan tidak loading)
               if (_fileList.isEmpty && !_isLoading && _statusMessage.isEmpty) ...[
                 const SizedBox(height: 20),
                 Card(
@@ -282,9 +278,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             prefixIcon: const Icon(Icons.link),
                             suffixIcon: IconButton(
                               icon: const Icon(Icons.paste),
-                              onPressed: () async {
-                                // Fitur paste bisa ditambahkan nanti dengan clipboard package
-                              },
+                              onPressed: () async {},
                             ),
                           ),
                         ),
@@ -308,7 +302,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
 
-              // Status & Loading Indicator
               if (_isLoading) ...[
                  const Spacer(),
                  const CircularProgressIndicator(),
@@ -323,14 +316,12 @@ class _HomeScreenState extends State<HomeScreen> {
                  const Spacer(),
               ],
 
-              // Info result count
               if (_fileList.isNotEmpty)
                  Padding(
                    padding: const EdgeInsets.symmetric(vertical: 8.0),
                    child: Text(_statusMessage, style: TextStyle(color: Colors.grey[600], fontWeight: FontWeight.bold)),
                  ),
 
-              // List Result
               Expanded(
                 child: ListView.builder(
                   itemCount: _fileList.length,
@@ -413,7 +404,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// --- SCREEN VIDEO PLAYER (Tidak banyak berubah, sudah oke) ---
 class VideoPlayerScreen extends StatefulWidget {
   final String url;
   const VideoPlayerScreen({super.key, required this.url});

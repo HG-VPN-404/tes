@@ -11,6 +11,6 @@
 -keep class io.flutter.plugins.videoplayer.** { *; }
 
 # Prevent R8 from stripping vital generated classes
--keep class com.example.hello_world.** { *; }
+-keep class com.tera.down.** { *; }
 -dontwarn io.flutter.embedding.**
 -ignorewarnings

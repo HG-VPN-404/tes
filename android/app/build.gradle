@@ -27,7 +27,7 @@ apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
 
 android {
     // PENTING: Harus ada namespace di Gradle baru
-    namespace "com.example.hello_world"
+    namespace "com.tera.down"
     
     // PENTING: Harus 34 biar sama dengan Target SDK
     compileSdkVersion 34
@@ -47,7 +47,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.example.hello_world"
+        applicationId "com.tera.down"
         minSdkVersion 21
         targetSdkVersion 34
         versionCode flutterVersionCode.toInteger()
