@@ -56,8 +56,11 @@ android {
 
     buildTypes {
         release {
-            // Signing pakai debug key dulu biar build sukses
-            signingConfig signingConfigs.debug
+            minifyEnabled true
+            shrinkResources true
+            
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.debug 
         }
     }
 }

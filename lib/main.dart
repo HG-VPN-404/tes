@@ -16,8 +16,6 @@ const String WORKER_URL = "https://sky.publicxx.workers.dev/?url=";
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Init Plugin Download
   await FlutterDownloader.initialize(debug: true, ignoreSsl: true);
   
   runApp(const MaterialApp(
@@ -36,25 +34,21 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _urlController = TextEditingController();
   
-  // Variabel State
   bool _isLoading = false;
   String _statusMessage = "";
   List<dynamic> _fileList = [];
   
-  // Setup Port untuk listener download progress (Optional tapi bagus buat UX)
+  // Stack untuk menyimpan history URL biar bisa tombol Back
+  List<String> _urlHistory = []; 
+
   final ReceivePort _port = ReceivePort();
 
   @override
   void initState() {
     super.initState();
-    // Setup listener download
     IsolateNameServer.registerPortWithName(_port.sendPort, 'downloader_send_port');
     _port.listen((dynamic data) {
-      // Bisa tambah logika update progress bar disini kalau mau
-      String id = data[0];
-      int status = data[1];
-      int progress = data[2];
-      print("Download Task: $id, Status: $status, Progress: $progress");
+      // Handle progress update here
     });
     FlutterDownloader.registerCallback(downloadCallback);
   }
@@ -71,31 +65,42 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  // Fungsi Utama: Nembak API Worker
-  Future<void> _fetchVideoData() async {
+  // Fungsi wrapper untuk tombol "Proses Link" awal
+  Future<void> _processInitialLink() async {
     final targetUrl = _urlController.text.trim();
     if (targetUrl.isEmpty) return;
+    
+    // Reset history saat cari link baru
+    _urlHistory.clear(); 
+    
+    // Construct URL awal
+    final apiUrl = "$WORKER_URL/?url=$targetUrl";
+    await _fetchData(apiUrl);
+  }
 
+  // Fungsi Inti untuk mengambil data dari API (Bisa url awal, bisa url browse folder)
+  Future<void> _fetchData(String fullApiUrl) async {
     setState(() {
       _isLoading = true;
-      _statusMessage = "Sedang memproses...";
+      _statusMessage = "Memuat data...";
       _fileList = [];
     });
 
     try {
-      // Construct URL API Gateway
-      // Format: WORKER_URL/?url=TARGET_URL
-      final apiUrl = Uri.parse("$WORKER_URL/?url=$targetUrl");
-      
-      final response = await http.get(apiUrl);
+      final response = await http.get(Uri.parse(fullApiUrl));
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body);
         
         if (json['status'] == 'success') {
           setState(() {
-            _fileList = json['data']; // Ambil array data
-            _statusMessage = "Ditemukan ${json['total_items']} file.";
+            _fileList = json['data'];
+            _statusMessage = "Ditemukan ${json['total_items']} item.";
+            
+            // Masukkan URL sekarang ke history biar bisa back
+            if (_urlHistory.isEmpty || _urlHistory.last != fullApiUrl) {
+              _urlHistory.add(fullApiUrl);
+            }
           });
         } else {
           setState(() {
@@ -118,30 +123,37 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // Fungsi Download
+  // Fungsi Back
+  void _goBack() {
+    if (_urlHistory.length > 1) {
+      _urlHistory.removeLast(); // Buang halaman sekarang
+      String previousUrl = _urlHistory.last; // Ambil halaman sebelumnya
+      
+      // Hapus lagi history terakhir karena akan ditambahkan lagi oleh _fetchData
+      _urlHistory.removeLast(); 
+      
+      _fetchData(previousUrl);
+    } else {
+      // Kalau sudah mentok, clear list
+      setState(() {
+        _fileList = [];
+        _urlHistory.clear();
+        _statusMessage = "";
+      });
+    }
+  }
+
   Future<void> _downloadFile(String url, String filename) async {
-    // 1. Cek Permission
     var status = await Permission.storage.request();
     if (!status.isGranted) {
-       // Coba manage external storage untuk Android 11+
        status = await Permission.manageExternalStorage.request();
-       if (!status.isGranted) {
-         ScaffoldMessenger.of(context).showSnackBar(
-           const SnackBar(content: Text("Izin penyimpanan ditolak!")),
-         );
-         return;
-       }
+       if (!status.isGranted) return;
     }
 
-    // 2. Tentukan folder simpan
-    // Menggunakan getExternalStorageDirectory (biasanya /sdcard/Android/data/com.package/files)
-    // Supaya aman dari aturan Scoped Storage Android terbaru
     final directory = await getExternalStorageDirectory();
     final savedDir = directory?.path;
-
     if (savedDir == null) return;
 
-    // 3. Eksekusi Download
     await FlutterDownloader.enqueue(
       url: url,
       savedDir: savedDir,
@@ -151,48 +163,58 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     
     ScaffoldMessenger.of(context).showSnackBar(
-       SnackBar(content: Text("Download dimulai: $filename")),
+       SnackBar(content: Text("Mulai download: $filename")),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    // Cek apakah bisa tombol back
+    bool canGoBack = _urlHistory.length > 1;
+
     return Scaffold(
-      appBar: AppBar(title: const Text("Terabox Downloader & Player")),
+      appBar: AppBar(
+        title: const Text("Terabox Player"),
+        leading: canGoBack 
+          ? IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: _goBack,
+            )
+          : null,
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // Input Section
-            TextField(
-              controller: _urlController,
-              decoration: InputDecoration(
-                labelText: "Tempel Link Terabox",
-                border: const OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.paste),
-                  onPressed: () async {
-                    // Logic paste clipboard bisa ditambah disini
-                  },
+            // Input hanya muncul kalau di halaman awal/kosong
+            if (_urlHistory.isEmpty) ...[
+              TextField(
+                controller: _urlController,
+                decoration: InputDecoration(
+                  labelText: "Tempel Link Terabox",
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.paste),
+                    onPressed: () {},
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _isLoading ? null : _fetchVideoData,
-                child: _isLoading 
-                  ? const CircularProgressIndicator(color: Colors.white) 
-                  : const Text("PROSES LINK"),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _isLoading ? null : _processInitialLink,
+                  child: _isLoading 
+                    ? const CircularProgressIndicator(color: Colors.white) 
+                    : const Text("PROSES LINK"),
+                ),
               ),
-            ),
-            
-            const SizedBox(height: 20),
+              const SizedBox(height: 20),
+            ],
+
             Text(_statusMessage, style: const TextStyle(color: Colors.grey)),
             const Divider(),
 
-            // List Result
             Expanded(
               child: _fileList.isEmpty 
               ? const Center(child: Text("Belum ada data"))
@@ -203,47 +225,62 @@ class _HomeScreenState extends State<HomeScreen> {
                     final String filename = item['filename'] ?? "Unknown";
                     final String? thumb = item['thumb'];
                     final String size = item['size_mb'] ?? "0";
-                    // PENTING: Ambil link proxy dari structure API kamu
+                    final bool isFolder = item['is_folder'] == true;
+                    
+                    // Logic Link
                     final String? proxyUrl = item['links']?['proxy'];
+                    final String? browseUrl = item['links']?['browse'];
 
                     return Card(
                       margin: const EdgeInsets.only(bottom: 10),
+                      // Kalau folder, warnanya agak beda dikit
+                      color: isFolder ? Colors.blue.shade50 : Colors.white,
                       child: ListTile(
-                        leading: thumb != null 
-                          ? Image.network(thumb, width: 50, fit: BoxFit.cover, 
-                              errorBuilder: (_,__,___) => const Icon(Icons.video_file))
-                          : const Icon(Icons.video_file),
+                        leading: isFolder
+                          ? const Icon(Icons.folder, color: Colors.orange, size: 40)
+                          : (thumb != null 
+                              ? Image.network(thumb, width: 50, fit: BoxFit.cover, errorBuilder: (_,__,___)=> const Icon(Icons.video_file))
+                              : const Icon(Icons.video_file, color: Colors.blue, size: 40)),
+                        
                         title: Text(filename, maxLines: 2, overflow: TextOverflow.ellipsis),
-                        subtitle: Text("$size MB"),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Tombol Play
-                            IconButton(
-                              icon: const Icon(Icons.play_circle_fill, color: Colors.blue),
+                        subtitle: Text(isFolder ? "Folder" : "$size MB"),
+                        
+                        trailing: isFolder
+                          // TAMPILAN JIKA FOLDER (Tombol Buka)
+                          ? IconButton(
+                              icon: const Icon(Icons.arrow_forward_ios),
                               onPressed: () {
-                                if (proxyUrl != null) {
-                                  Navigator.push(context, MaterialPageRoute(
-                                    builder: (_) => VideoPlayerScreen(url: proxyUrl)
-                                  ));
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text("Link proxy tidak tersedia")),
-                                  );
+                                if (browseUrl != null) {
+                                  _fetchData(browseUrl); // REKURSIF: Buka folder
                                 }
                               },
+                            )
+                          // TAMPILAN JIKA FILE (Tombol Play & Download)
+                          : Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.play_circle_fill, color: Colors.blue),
+                                  onPressed: () {
+                                    if (proxyUrl != null) {
+                                      Navigator.push(context, MaterialPageRoute(
+                                        builder: (_) => VideoPlayerScreen(url: proxyUrl)
+                                      ));
+                                    }
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.download, color: Colors.green),
+                                  onPressed: () {
+                                    if (proxyUrl != null) _downloadFile(proxyUrl, filename);
+                                  },
+                                ),
+                              ],
                             ),
-                            // Tombol Download
-                            IconButton(
-                              icon: const Icon(Icons.download, color: Colors.green),
-                              onPressed: () {
-                                if (proxyUrl != null) {
-                                  _downloadFile(proxyUrl, filename);
-                                }
-                              },
-                            ),
-                          ],
-                        ),
+                        // Kalau folder bisa diklik body-nya juga
+                        onTap: isFolder && browseUrl != null 
+                          ? () => _fetchData(browseUrl) 
+                          : null,
                       ),
                     );
                   },
@@ -256,7 +293,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// --- SCREEN VIDEO PLAYER ---
 class VideoPlayerScreen extends StatefulWidget {
   final String url;
   const VideoPlayerScreen({super.key, required this.url});
@@ -276,7 +312,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Future<void> _initializePlayer() async {
-    // Load video dari URL Proxy
     _videoPlayerController = VideoPlayerController.networkUrl(Uri.parse(widget.url));
     await _videoPlayerController.initialize();
 
@@ -287,12 +322,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         looping: false,
         aspectRatio: _videoPlayerController.value.aspectRatio,
         errorBuilder: (context, errorMessage) {
-          return Center(
-            child: Text(
-              "Gagal memutar video.\n$errorMessage",
-              style: const TextStyle(color: Colors.white),
-            ),
-          );
+          return Center(child: Text("Error: $errorMessage", style: const TextStyle(color: Colors.white)));
         },
       );
     });
